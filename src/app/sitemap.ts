@@ -6,7 +6,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     {
       url: "https://mmdigitalstudio.com.mx",
-      lastModified: new Date("2026-11-22"),
+      lastModified: new Date("2026-11-23"),
       changeFrequency: "weekly",
       priority: 1,
     },
