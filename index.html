@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dev Sprite Animation - Martín Vázquez</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #02091F;
+      color: #ffffff;
+      font-family: 'Courier New', Courier, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 16px;
+    }
+    .canvas-container {
+      border: 4px solid #2d3436;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.7), 0 0 0 2px #d4af37;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #1a1c2c;
+    }
+    canvas {
+      display: block;
+      width: 640px;
+      height: 480px;
+      image-rendering: pixelated; /* Mantiene los píxeles nítidos */
+      image-rendering: crisp-edges;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      background: #11162b;
+      padding: 10px 20px;
+      border-radius: 6px;
+      border: 1px solid #2d3436;
+    }
+    button {
+      background: #2d3436;
+      color: #d4af37;
+      border: 1px solid #d4af37;
+      padding: 6px 14px;
+      font-family: inherit;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+    button:hover {
+      background: #d4af37;
+      color: #02091F;
+    }
+    .status-badge {
+      font-size: 14px;
+      color: #a0aec0;
+      min-width: 210px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="canvas-container">
+    <!-- Resolución interna nativa de 160x120 (estilo GBA/SNES) escalada 4x -->
+    <canvas id="scene" width="160" height="120"></canvas>
+  </div>
+
+  <div class="controls">
+    <span class="status-badge" id="statusText">Estado: Programando (Día)</span>
+    <button id="speedBtn">Velocidad: 1x</button>
+    <button id="resetBtn">Reiniciar Ciclo</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('scene');
+    const ctx = canvas.getContext('2d');
+    const statusText = document.getElementById('statusText');
+    const speedBtn = document.getElementById('speedBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    // Paleta de colores retro
+    const PALETTE = {
+      wallDay: '#3b4252',
+      wallNight: '#191d2b',
+      skyDay: '#5fcde4',
+      skySunset: '#d95763',
+      skyNight: '#0f1326',
+      skyDawn: '#f77622',
+      sun: '#fbf236',
+      moon: '#ffffff',
+      windowFrame: '#222034',
+      deskTop: '#8f563b',
+      deskFront: '#663931',
+      deskShadow: '#45283c',
+      monitorCase: '#323c39',
+      monitorScreen: '#14182e',
+      codeGreen: '#6abe30',
+      codeCyan: '#5fcde4',
+      codeGold: '#fbf236',
+      chair: '#222034',
+      chairHighlight: '#3f3f74',
+      // Rasgos del personaje
+      skin: '#c68642',
+      skinShadow: '#8d5524',
+      hair: '#111111',
+      beard: '#1a1a1a',
+      glasses: '#1d2b53',
+      glassesLens: '#83769c',
+      sweater: '#ede6d6',
+      sweaterShadow: '#c7b8a1',
+      pants: '#1d2b53',
+      shoes: '#45283c'
+    };
+
+    let tick = 0;
+    let speedMultiplier = 1;
+    // Duración total del ciclo en frames (a 60fps, 900 frames = 15 segundos)
+    const CYCLE_LENGTH = 900;
+
+    // Función auxiliar para dibujar píxeles/rectángulos limpios
+    function px(x, y, w, h, color) {
+      ctx.fillStyle = color;
+      ctx.fillRect(Math.floor(x), Math.floor(y), Math.floor(w), Math.floor(h));
+    }
+
+    // Mezcla simple de colores hexadecimales para transiciones día/noche
+    function lerpColor(a, b, amount) {
+      const ah = parseInt(a.replace(/#/g, ''), 16),
+            ar = ah >> 16, ag = ah >> 8 & 0xff, ab = ah & 0xff,
+            bh = parseInt(b.replace(/#/g, ''), 16),
+            br = bh >> 16, bg = bh >> 8 & 0xff, bb = bh & 0xff,
+            rr = ar + amount * (br - ar),
+            rg = ag + amount * (bg - ag),
+            rb = ab + amount * (bb - ab);
+      return '#' + ((1 << 24) + (Math.round(rr) << 16) + (Math.round(rg) << 8) + Math.round(rb)).toString(16).slice(1);
+    }
+
+    function getState(t) {
+      // 0 - 300: Día (Programando)
+      // 300 - 420: Atardecer -> Noche (Programando)
+      // 420 - 520: Noche (Voltea y saluda / dice adiós)
+      // 520 - 700: Noche (Se duerme sobre el escritorio)
+      // 700 - 800: Amanecer (Despierta y se estira/para)
+      // 800 - 900: Día (Vuelve a programar)
+      if (t < 300) return { phase: 'CODING_DAY', label: 'Programando (Día)' };
+      if (t < 420) return { phase: 'CODING_SUNSET', label: 'Programando (Atardecer)' };
+      if (t < 520) return { phase: 'WAVING_NIGHT', label: '¡Buenas noches! Despidiéndose' };
+      if (t < 700) return { phase: 'SLEEPING', label: 'Durmiendo (Zzz...)' };
+      if (t < 800) return { phase: 'WAKING_DAWN', label: 'Amaneciendo... ¡A darle!' };
+      return { phase: 'CODING_MORNING', label: 'Programando (Nuevo día)' };
+    }
+
+    function drawBackgroundAndWindow(t) {
+      let wallColor = PALETTE.wallDay;
+      let skyColor = PALETTE.skyDay;
+      let nightFactor = 0;
+
+      if (t >= 300 && t < 420) {
+        const p = (t - 300) / 120;
+        skyColor = p < 0.5 ? lerpColor(PALETTE.skyDay, PALETTE.skySunset, p * 2) : lerpColor(PALETTE.skySunset, PALETTE.skyNight, (p - 0.5) * 2);
+        wallColor = lerpColor(PALETTE.wallDay, PALETTE.wallNight, p);
+        nightFactor = p;
+      } else if (t >= 420 && t < 700) {
+        skyColor = PALETTE.skyNight;
+        wallColor = PALETTE.wallNight;
+        nightFactor = 1;
+      } else if (t >= 700 && t < 800) {
+        const p = (t - 700) / 100;
+        skyColor = p < 0.5 ? lerpColor(PALETTE.skyNight, PALETTE.skyDawn, p * 2) : lerpColor(PALETTE.skyDawn, PALETTE.skyDay, (p - 0.5) * 2);
+        wallColor = lerpColor(PALETTE.wallNight, PALETTE.wallDay, p);
+        nightFactor = 1 - p;
+      }
+
+      // Pared de la habitación
+      px(0, 0, 160, 95, wallColor);
+      // Zócalo y piso
+      px(0, 92, 160, 3, '#222034');
+      px(0, 95, 160, 25, '#2e222f');
+
+      // Ventana (lado izquierdo-centro)
+      const wx = 22, wy = 16, ww = 46, wh = 38;
+      px(wx - 2, wy - 2, ww + 4, wh + 4, PALETTE.windowFrame);
+      px(wx, wy, ww, wh, skyColor);
+
+      // Sol o Luna dentro de la ventana
+      if (nightFactor < 0.5) {
+        // Sol
+        const sunY = wy + 8 + (nightFactor * 30);
+        px(wx + 32, sunY, 7, 7, PALETTE.sun);
+        // Nube pixel art
+        px(wx + 6, wy + 12, 12, 3, '#ffffff');
+        px(wx + 8, wy + 10, 8, 2, '#ffffff');
+      } else {
+        // Luna y estrellas
+        px(wx + 10, wy + 7, 6, 6, PALETTE.moon);
+        px(wx + 12, wy + 7, 4, 4, skyColor); // Media luna
+        if (Math.floor(t / 15) % 2 === 0) {
+          px(wx + 28, wy + 9, 1, 1, '#ffffff');
+          px(wx + 36, wy + 20, 1, 1, '#ffffff');
+        } else {
+          px(wx + 22, wy + 18, 1, 1, '#ffffff');
+          px(wx + 38, wy + 8, 1, 1, '#ffffff');
+        }
+      }
+
+      // Marco interior de la ventana (cruz)
+      px(wx + 22, wy, 2, wh, PALETTE.windowFrame);
+      px(wx, wy + 18, ww, 2, PALETTE.windowFrame);
+      // Repisa
+      px(wx - 4, wy + wh + 2, ww + 8, 3, '#3f3f74');
+
+      // Luz ambiental de la ventana proyectada en el cuarto
+      if (nightFactor > 0.6) {
+        // Brillo del monitor en la oscuridad
+        ctx.fillStyle = 'rgba(95, 205, 228, 0.08)';
+        ctx.fillRect(65, 35, 50, 45);
+      }
+    }
+
+    function drawDeskAndComputer(t, isCoding) {
+      const dx = 55, dy = 68;
+
+      // Monitor
+      px(dx + 22, dy - 22, 26, 17, PALETTE.monitorCase);
+      px(dx + 24, dy - 20, 22, 13, PALETTE.monitorScreen);
+      // Base del monitor
+      px(dx + 32, dy - 5, 6, 3, PALETTE.monitorCase);
+      px(dx + 28, dy - 2, 14, 2, PALETTE.monitorCase);
+
+      // Código animado en pantalla
+      if (isCoding) {
+        const scroll = Math.floor(t / 6) % 4;
+        const colors = [PALETTE.codeGreen, PALETTE.codeCyan, PALETTE.codeGold, PALETTE.codeGreen];
+        for (let i = 0; i < 4; i++) {
+          const lineY = dy - 18 + (i * 3);
+          const lineW = ((i + scroll) % 3) * 4 + 6;
+          px(dx + 26, lineY, lineW, 1, colors[(i + scroll) % colors.length]);
+        }
+      } else {
+        // Protector de pantalla / modo reposo
+        px(dx + 34, dy - 14, 2, 2, PALETTE.codeCyan);
+      }
+
+      // Taza de café en el escritorio
+      px(dx + 54, dy - 5, 4, 5, '#ffffff');
+      px(dx + 58, dy - 4, 1, 3, '#ffffff');
+
+      // Superficie del escritorio
+      px(dx, dy, 66, 4, PALETTE.deskTop);
+      px(dx, dy + 4, 66, 3, PALETTE.deskFront);
+      // Patas del escritorio
+      px(dx + 3, dy + 7, 4, 28, PALETTE.deskShadow);
+      px(dx + 59, dy + 7, 4, 28, PALETTE.deskShadow);
+    }
+
+    function drawCharacter(t, phase) {
+      const cx = 82; // Posición X frente al monitor
+      const cy = 54; // Posición Y sentado
+
+      // Silla gamer / oficina (respaldo detrás o al lado)
+      const drawChairBack = () => {
+        px(cx + 1, cy + 12, 14, 16, PALETTE.chair);
+        px(cx + 2, cy + 13, 12, 14, PALETTE.chairHighlight);
+        px(cx + 6, cy + 28, 4, 10, PALETTE.chair);
+        px(cx + 2, cy + 38, 12, 2, PALETTE.chair);
+      };
+
+      if (phase === 'CODING_DAY' || phase === 'CODING_SUNSET' || phase === 'CODING_MORNING') {
+        // --- DE ESPALDAS PROGRAMANDO ---
+        const armOffset = Math.floor(t / 4) % 2; // Tecleando rápido
+
+        // Piernas
+        px(cx + 3, cy + 24, 4, 12, PALETTE.pants);
+        px(cx + 9, cy + 24, 4, 12, PALETTE.pants);
+        px(cx + 2, cy + 36, 5, 2, PALETTE.shoes);
+        px(cx + 9, cy + 36, 5, 2, PALETTE.shoes);
+
+        // Torso (Suéter claro de espaldas)
+        px(cx + 2, cy + 11, 12, 14, PALETTE.sweater);
+        px(cx + 2, cy + 23, 12, 2, PALETTE.sweaterShadow);
+
+        // Brazos tecleando
+        px(cx, cy + 12 + armOffset, 3, 7, PALETTE.sweaterShadow);
+        px(cx + 13, cy + 12 + (1 - armOffset), 3, 7, PALETTE.sweaterShadow);
+
+        // Cabeza de espaldas (Cabello oscuro con copete)
+        px(cx + 3, cy, 10, 11, PALETTE.hair);
+        px(cx + 4, cy - 2, 8, 2, PALETTE.hair); // Copete
+        // Cuello / orejas
+        px(cx + 2, cy + 5, 1, 3, PALETTE.skinShadow);
+        px(cx + 13, cy + 5, 1, 3, PALETTE.skinShadow);
+        px(cx + 5, cy + 10, 6, 2, PALETTE.skinShadow);
+
+        // Respaldo bajo de la silla
+        px(cx + 3, cy + 17, 10, 9, PALETTE.chair);
+        px(cx + 6, cy + 26, 4, 12, PALETTE.chair);
+        px(cx + 2, cy + 38, 12, 2, PALETTE.chair);
+
+      } else if (phase === 'WAVING_NIGHT') {
+        // --- VOLTEA DE FRENTE Y SALUDA DICIENDO ADIÓS ---
+        drawChairBack();
+
+        // Piernas
+        px(cx + 3, cy + 25, 4, 11, PALETTE.pants);
+        px(cx + 9, cy + 25, 4, 11, PALETTE.pants);
+        px(cx + 2, cy + 36, 5, 2, PALETTE.shoes);
+        px(cx + 9, cy + 36, 5, 2, PALETTE.shoes);
+
+        // Torso de frente
+        px(cx + 2, cy + 12, 12, 13, PALETTE.sweater);
+        px(cx + 6, cy + 12, 4, 2, PALETTE.skin); // Cuello
+
+        // Brazo izquierdo abajo
+        px(cx, cy + 13, 3, 9, PALETTE.sweater);
+        px(cx, cy + 22, 3, 2, PALETTE.skin);
+
+        // Brazo derecho levantado saludando
+        const wave = Math.floor(t / 8) % 2;
+        px(cx + 14, cy + 7, 3, 7, PALETTE.sweater);
+        px(cx + 14 + wave, cy + 4, 3, 3, PALETTE.skin); // Mano saludando
+
+        // Cabeza de frente (con lentes y barba como en tu foto)
+        px(cx + 3, cy + 1, 10, 11, PALETTE.skin);
+        // Cabello y copete
+        px(cx + 3, cy - 2, 10, 4, PALETTE.hair);
+        px(cx + 5, cy - 3, 6, 1, PALETTE.hair);
+        // Lentes
+        px(cx + 3, cy + 4, 4, 3, PALETTE.glasses);
+        px(cx + 9, cy + 4, 4, 3, PALETTE.glasses);
+        px(cx + 7, cy + 5, 2, 1, PALETTE.glasses);
+        px(cx + 4, cy + 5, 2, 1, PALETTE.glassesLens);
+        px(cx + 10, cy + 5, 2, 1, PALETTE.glassesLens);
+        // Barba y bigote
+        px(cx + 3, cy + 8, 10, 4, PALETTE.beard);
+        px(cx + 6, cy + 9, 4, 1, PALETTE.skin); // Boca sonriendo
+
+        // Globo de texto "¡Adiós!"
+        px(cx + 18, cy - 8, 22, 10, '#ffffff');
+        px(cx + 17, cy - 3, 2, 2, '#ffffff');
+        ctx.fillStyle = '#02091F';
+        ctx.font = '6px monospace';
+        ctx.fillText('¡Adiós!', cx + 19, cy - 1);
+
+      } else if (phase === 'SLEEPING') {
+        // --- DURMIENDO SOBRE EL ESCRITORIO ---
+        drawChairBack();
+
+        // Piernas sentadas
+        px(cx + 4, cy + 25, 4, 11, PALETTE.pants);
+        px(cx + 9, cy + 25, 4, 11, PALETTE.pants);
+        px(cx + 3, cy + 36, 5, 2, PALETTE.shoes);
+        px(cx + 9, cy + 36, 5, 2, PALETTE.shoes);
+
+        // Torso inclinado hacia adelante sobre la mesa (y=68)
+        px(cx + 1, cy + 16, 13, 10, PALETTE.sweater);
+        // Brazos cruzados sobre el escritorio
+        px(cx - 2, cy + 12, 12, 3, PALETTE.sweaterShadow);
+        // Cabeza apoyada en los brazos
+        px(cx - 1, cy + 5, 10, 8, PALETTE.hair);
+        px(cx + 1, cy + 8, 7, 4, PALETTE.skin);
+        px(cx + 2, cy + 9, 4, 2, PALETTE.beard);
+
+        // Animación flotante de "Zzz"
+        const zStep = Math.floor(t / 20) % 3;
+        ctx.fillStyle = '#5fcde4';
+        ctx.font = '6px monospace';
+        if (zStep >= 0) ctx.fillText('z', cx + 8, cy + 2);
+        if (zStep >= 1) ctx.fillText('Z', cx + 12, cy - 3);
+        if (zStep >= 2) ctx.fillText('Z', cx + 16, cy - 8);
+
+      } else if (phase === 'WAKING_DAWN') {
+        // --- AMANECE, SE PARA Y SE ESTIRA ---
+        drawChairBack();
+
+        const standProgress = Math.min(1, (t - 700) / 40);
+        const standY = cy - Math.floor(standProgress * 6); // Se levanta 6px
+
+        // Piernas estiradas de pie
+        px(cx + 4, standY + 25, 3, 17, PALETTE.pants);
+        px(cx + 9, standY + 25, 3, 17, PALETTE.pants);
+        px(cx + 3, standY + 42, 4, 2, PALETTE.shoes);
+        px(cx + 9, standY + 42, 4, 2, PALETTE.shoes);
+
+        // Torso de pie
+        px(cx + 2, standY + 11, 12, 14, PALETTE.sweater);
+
+        // Brazos arriba estirándose
+        px(cx - 1, standY + 3, 3, 9, PALETTE.sweater);
+        px(cx + 14, standY + 3, 3, 9, PALETTE.sweater);
+        px(cx - 1, standY + 1, 3, 2, PALETTE.skin);
+        px(cx + 14, standY + 1, 3, 2, PALETTE.skin);
+
+        // Cabeza
+        px(cx + 3, standY, 10, 11, PALETTE.skin);
+        px(cx + 3, standY - 3, 10, 4, PALETTE.hair);
+        px(cx + 3, standY + 4, 4, 3, PALETTE.glasses);
+        px(cx + 9, standY + 4, 4, 3, PALETTE.glasses);
+        px(cx + 3, standY + 8, 10, 3, PALETTE.beard);
+      }
+    }
+
+    function loop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const currentState = getState(tick);
+      statusText.textContent = `Estado: ${currentState.label}`;
+
+      const isCoding = currentState.phase.startsWith('CODING');
+
+      drawBackgroundAndWindow(tick);
+      drawDeskAndComputer(tick, isCoding);
+      drawCharacter(tick, currentState.phase);
+
+      tick = (tick + speedMultiplier) % CYCLE_LENGTH;
+      requestAnimationFrame(loop);
+    }
+
+    // Controles interactivos
+    speedBtn.addEventListener('click', () => {
+      speedMultiplier = speedMultiplier === 1 ? 2 : speedMultiplier === 2 ? 4 : 1;
+      speedBtn.textContent = `Velocidad: ${speedMultiplier}x`;
+    });
+
+    resetBtn.addEventListener('click', () => {
+      tick = 0;
+    });
+
+    // Iniciar animación
+    loop();
+  </script>
+</body>
+</html>
