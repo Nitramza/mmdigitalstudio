@@ -8,6 +8,6 @@ export default function robots(): MetadataRoute.Robots {
       userAgent: "*",
       allow: "/",
     },
-    sitemap: "https://digitalstudio.example/sitemap.xml",
+    sitemap: "https://mmdigitalstudio.com.mx/sitemap.xml",
   };
 }
